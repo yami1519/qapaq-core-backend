@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.core.cfg_config import settings
 from app.routes import (
     rtr_scoring, rtr_creditos, rtr_ahorros,
     rtr_dashboard, rtr_clientes, rtr_auth, rtr_homebanking, rtr_recuperaciones,
@@ -13,7 +14,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # React Vite frontend
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,5 +32,4 @@ app.include_router(rtr_recuperaciones.router, prefix="/recuperaciones", tags=["R
 @app.get("/")
 def root():
     return {"sistema": "Core Financiero Financiera Qapaq", "version": "1.0.0", "status": "ok"}
-
 
