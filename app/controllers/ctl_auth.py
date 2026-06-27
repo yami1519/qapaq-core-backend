@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from app.core.cfg_security import verify_password, create_access_token
+from app.core.cfg_security import create_access_token
 from app.core.cfg_roles import rol_desde_cargo
 
 def login(db: Session, numerodni: str, password: str):
@@ -18,15 +18,15 @@ def login(db: Session, numerodni: str, password: str):
         LEFT JOIN dpersonalasesor pa ON pa.pkpersonal = p.pkpersonal
         LEFT JOIN dasesor a          ON a.pkasesor = pa.pkasesor
         WHERE p.numerodni = :dni
+          AND (
+              (p.password_hash IS NOT NULL AND p.password_hash = crypt(:password, p.password_hash))
+              OR
+              (p.password_hash IS NULL AND p.numerodni = :password)
+          )
         LIMIT 1
     """)
-    row = db.execute(sql, {"dni": numerodni}).fetchone()
+    row = db.execute(sql, {"dni": numerodni, "password": password}).fetchone()
     if not row:
-        return None
-
-    # En desarrollo: password = numerodni (simplificado)
-    # En producción: verify_password(password, row.password_hash)
-    if password != numerodni:
         return None
 
     rol        = rol_desde_cargo(row.codcargopersonal)
