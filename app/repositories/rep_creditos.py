@@ -9,6 +9,13 @@ def get_cartera_asesor(db: Session, pkasesor: int, periodomes: int = 202512):
             cc.codcuentacredito,
             cl.nomcliente,
             cl.numerodocumentoidentidad,
+            CASE TRIM(p.codtipocredito)
+                WHEN '01' THEN 'ME'
+                WHEN '02' THEN 'PE'
+                WHEN '03' THEN 'CO'
+                ELSE TRIM(p.codtipocredito)
+            END AS codtipocredito,
+            p.destipocredito,
             f.montosaldocapital,
             f.diasatrasocredito,
             f.car_vig_capital,
@@ -18,6 +25,7 @@ def get_cartera_asesor(db: Session, pkasesor: int, periodomes: int = 202512):
         FROM fagcuentacredito f
         JOIN dcuentacredito cc ON cc.pkcuentacredito = f.pkcuentacredito
         JOIN dcliente cl       ON cl.pkcliente = cc.pkcliente
+        LEFT JOIN dproducto p  ON p.pkproducto = f.pkproducto
         LEFT JOIN dcalificacioncrediticia cal
             ON cal.pkcalificacioncrediticia = f.pkcalificacioncrediticiainterna
         WHERE f.pkasesor = :pkasesor
