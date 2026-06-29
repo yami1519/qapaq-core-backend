@@ -6,7 +6,9 @@ por monto/endeudamiento (act.22) -> opiniones (act.23-36) -> comité (act.41) ->
 resolución (act.42-43) -> cronograma referencial (act.45).
 """
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
+from app.core import cfg_tarifario
 from app.controllers import ctl_scoring
 from app.repositories import rep_clientes, rep_solicitudes as repsol, rep_evaluacion
 from app.services import svc_elegibilidad, svc_rds
@@ -275,31 +277,22 @@ def generar_cronograma(db: Session, codsolicitud: str) -> dict:
 
     monto = float(sol.montoaprobadocredito or sol.montosolicitudcredito or 0)
     plazo = int(sol.plazosolicitudcredito or sol.nrocuotasolicitud or 12)
-    tea = ctl_scoring.TEA_POR_TIPO.get(
-        (sol.codtiposolicitud or "CO"), {"mid": 40.0}
-    )["mid"]
-    tem = (1 + tea / 100) ** (1 / 12) - 1
-    cuota = monto * tem * (1 + tem) ** plazo / ((1 + tem) ** plazo - 1) if tem > 0 else monto / plazo
-
-    saldo = monto
-    cuotas = []
-    for n in range(1, plazo + 1):
-        interes = saldo * tem
-        capital = cuota - interes
-        saldo = max(0.0, saldo - capital)
-        cuotas.append({
-            "nrocuota": n,
-            "cuota": round(cuota, 2),
-            "capital": round(capital, 2),
-            "interes": round(interes, 2),
-            "saldo": round(saldo, 2),
-        })
+    cod_producto = db.execute(text("""
+        SELECT p.codtipocredito
+        FROM dsolicitud s
+        LEFT JOIN dproducto p ON p.pkproducto = s.pkproducto
+        WHERE s.pksolicitud = :pksol
+        LIMIT 1
+    """), {"pksol": sol.pksolicitud}).scalar()
+    tarifario = cfg_tarifario.obtener_tarifario(cod_producto or sol.codtiposolicitud)
+    tea = tarifario.tea_usada
+    cuotas = cfg_tarifario.generar_cronograma_frances(monto, plazo, tea)
 
     return {
         "codsolicitud": codsolicitud,
         "monto": round(monto, 2),
         "plazo_meses": plazo,
         "tea": tea,
-        "cuota_referencial": round(cuota, 2),
+        "cuota_referencial": cuotas[0]["cuota"] if cuotas else 0,
         "cronograma": cuotas,
     }

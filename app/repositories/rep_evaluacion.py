@@ -11,6 +11,8 @@ from calendar import monthrange
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
+from app.core import cfg_tarifario
+
 PERIODO = 202512
 
 
@@ -171,8 +173,10 @@ def desembolsar(db: Session, sol) -> dict:
         raise ValueError("El cliente no tiene una cuenta de ahorros activa para recibir el desembolso.")
 
     sol_data = db.execute(text("""
-        SELECT s.pkproducto, s.pkagencia, s.pkasesor, s.pkmoneda
+        SELECT s.pkproducto, s.pkagencia, s.pkasesor, s.pkmoneda,
+               p.codtipocredito
         FROM dsolicitud s
+        LEFT JOIN dproducto p ON p.pkproducto = s.pkproducto
         WHERE s.pksolicitud = :pksol
         LIMIT 1
     """), {"pksol": sol.pksolicitud}).fetchone()
@@ -210,13 +214,17 @@ def desembolsar(db: Session, sol) -> dict:
     pkagencia = sol_data.pkagencia or cat.ag
     pkasesor = sol_data.pkasesor or cat.asesor
     pkmoneda = sol_data.pkmoneda or cat.mon
-    cuota = round(monto / plazo, 4)
+    tarifario = cfg_tarifario.obtener_tarifario(sol_data.codtipocredito or getattr(sol, "codtiposolicitud", None))
+    tea = tarifario.tea_usada
+    cronograma = cfg_tarifario.generar_cronograma_frances(monto, plazo, tea)
+    total_interes = round(sum(c["interes"] for c in cronograma), 2)
+    total_programado = round(sum(c["cuota"] for c in cronograma), 2)
 
     db.execute(text("""
         INSERT INTO fagcuentacredito (
             periodomes, pkcuentacredito, pksolicitud, pkestadocredito,
             nrocuotas, nrodias, nrodiasgracias,
-            montoaprobadocredito, montocapitaldesembolsado,
+            montoaprobadocredito, montocapitaldesembolsado, montointeresprogramado,
             pkproducto, pkmoneda, tasainterescompensatoria, tasainteresmoratoria,
             fechageneracioncredito, fechadesembolsocredito,
             pkcliente, pkcondicioncontable, pkcalificacioncrediticiainterna,
@@ -225,11 +233,11 @@ def desembolsar(db: Session, sol) -> dict:
         ) VALUES (
             :per, :pkcc, :pksol, :est,
             :plazo, 0, 0,
-            :monto, :monto,
-            :prod, :mon, 0, 0,
+            :monto, :monto, :total_interes,
+            :prod, :mon, :tea, 0,
             :fec, :fec,
             :pkcli, :cond, :cal,
-            :monto, :monto, :monto, :monto,
+            :monto, :monto, :monto, :total_programado,
             :ag, :asesor, NOW()
         )
         ON CONFLICT (periodomes, pkcuentacredito) DO NOTHING
@@ -238,13 +246,13 @@ def desembolsar(db: Session, sol) -> dict:
         "est": cat.est, "plazo": plazo, "monto": monto,
         "prod": pkproducto, "mon": pkmoneda, "fec": fecha_desembolso,
         "pkcli": sol.pkcliente, "cond": cat.cond, "cal": cat.cal,
-        "ag": pkagencia, "asesor": pkasesor,
+        "ag": pkagencia, "asesor": pkasesor, "tea": tea,
+        "total_interes": total_interes, "total_programado": total_programado,
     })
 
-    saldo = monto
-    for nro in range(1, plazo + 1):
+    for cuota_plan in cronograma:
+        nro = cuota_plan["nrocuota"]
         vencimiento = _add_months(fecha_desembolso, nro)
-        saldo = max(0, round(saldo - cuota, 4))
         db.execute(text("""
             INSERT INTO fplanpagomes (
                 periodomes, pkcuentacredito, codplanpago, nrocuota,
@@ -252,13 +260,13 @@ def desembolsar(db: Session, sol) -> dict:
                 pkcliente, pkcondicioncontable, pkcalificacioncrediticiainterna,
                 pkagencia, pkasesor, codestadocuota, fechavencimientopagocuota,
                 montocuota, montosaldo, montosaldocapital, montocapitalprogramado,
-                montocapitaldesembolsado, fecultactualizacion
+                montointeresprogramado, montocapitaldesembolsado, fecultactualizacion
             ) VALUES (
                 :per, :pkcc, :codplan, :nro,
                 :pksol, :est, :prod, :mon,
                 :pkcli, :cond, :cal,
                 :ag, :asesor, 'PE', :vence,
-                :cuota, :saldo, :saldo, :cuota,
+                :cuota, :saldo, :saldo, :capital, :interes,
                 :monto, NOW()
             )
             ON CONFLICT (periodomes, pkcuentacredito, nrocuota) DO NOTHING
@@ -268,8 +276,10 @@ def desembolsar(db: Session, sol) -> dict:
             "nro": nro, "pksol": sol.pksolicitud, "est": cat.est,
             "prod": pkproducto, "mon": pkmoneda, "pkcli": sol.pkcliente,
             "cond": cat.cond, "cal": cat.cal, "ag": pkagencia,
-            "asesor": pkasesor, "vence": vencimiento, "cuota": cuota,
-            "saldo": saldo, "monto": monto,
+            "asesor": pkasesor, "vence": vencimiento,
+            "cuota": cuota_plan["cuota"], "capital": cuota_plan["capital"],
+            "interes": cuota_plan["interes"], "saldo": cuota_plan["saldo"],
+            "monto": monto,
         })
 
     db.execute(text("""

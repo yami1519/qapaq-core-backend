@@ -1,13 +1,24 @@
 from sqlalchemy.orm import Session
+from app.core import cfg_tarifario
 from app.repositories import rep_clientes, rep_creditos
 
-# Tablas de referencia
+# Tabla de referencia mantenida por compatibilidad con imports existentes.
 TEA_POR_TIPO = {
-    "ME": {"min": 28.0, "mid": 40.0, "max": 55.0},
-    "PE": {"min": 18.0, "mid": 25.0, "max": 32.0},
-    "CO": {"min": 22.0, "mid": 33.0, "max": 45.0},
-    "HI": {"min":  9.0, "mid": 11.5, "max": 14.0},
-    "GE": {"min": 12.0, "mid": 15.0, "max": 18.0},
+    "ME": {
+        "min": cfg_tarifario.NEGOCIO.tea_minima,
+        "mid": cfg_tarifario.NEGOCIO.tea_usada,
+        "max": cfg_tarifario.NEGOCIO.tea_maxima,
+    },
+    "PE": {
+        "min": cfg_tarifario.NEGOCIO.tea_minima,
+        "mid": cfg_tarifario.NEGOCIO.tea_usada,
+        "max": cfg_tarifario.NEGOCIO.tea_maxima,
+    },
+    "CO": {
+        "min": cfg_tarifario.PERSONAL.tea_minima,
+        "mid": cfg_tarifario.PERSONAL.tea_usada,
+        "max": cfg_tarifario.PERSONAL.tea_maxima,
+    },
 }
 
 SECTORES_RIESGO = {
@@ -34,12 +45,12 @@ def calcular_score(
     detalle = {}
 
     # ── 1. CAPACIDAD DE PAGO (40 pts) ──────────────────────────
+    tarifario = cfg_tarifario.obtener_tarifario(codtipocredito)
     tea_tipo = TEA_POR_TIPO.get(
-        codtipocredito, {"min": 30.0, "mid": 40.0, "max": 55.0}
+        codtipocredito, {"min": tarifario.tea_minima, "mid": tarifario.tea_usada, "max": tarifario.tea_maxima}
     )
     tea_ref = tea_tipo["mid"]
-    tem = (1 + tea_ref / 100) ** (1 / 12) - 1
-    cuota = montosolicitud * tem * (1 + tem)**plazo / ((1 + tem)**plazo - 1)
+    cuota = cfg_tarifario.cuota_francesa(montosolicitud, plazo, tea_ref)
     ratio_cuota_ingreso = cuota / montoingresoneto if montoingresoneto > 0 else 1
 
     if ratio_cuota_ingreso <= 0.30:
@@ -114,8 +125,7 @@ def calcular_score(
         observaciones.append("Score insuficiente para aprobación automática.")
 
     # Recalcular cuota con TEA real sugerida
-    tem_real = (1 + tea_sugerida / 100) ** (1 / 12) - 1
-    cuota_final = montosolicitud * tem_real * (1+tem_real)**plazo / ((1+tem_real)**plazo - 1)
+    cuota_final = cfg_tarifario.cuota_francesa(montosolicitud, plazo, tea_sugerida)
 
     return {
         "codcliente":      codcliente,
