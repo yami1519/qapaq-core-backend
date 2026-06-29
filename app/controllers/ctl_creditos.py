@@ -41,6 +41,15 @@ def determinar_ruta(monto: float, codtipocredito: str,
 
     requiere_admin    = monto >= UMBRAL_OPINION_ADMIN
     requiere_jefe_reg = monto >= UMBRAL_OPINION_JEFEREG
+    if monto < UMBRAL_OPINION_ADMIN:
+        tramo_monto = "BAJO"
+        autoridad_monto = "asesor/admin"
+    elif monto < UMBRAL_OPINION_JEFEREG:
+        tramo_monto = "MEDIO"
+        autoridad_monto = "jefe de agencia / jefe regional"
+    else:
+        tramo_monto = "ALTO"
+        autoridad_monto = "riesgos/comité"
 
     # Reglas de Art. 34 para opinión de Riesgos
     r1 = monto >= UMBRAL_RIESGOS_GENERAL
@@ -64,6 +73,8 @@ def determinar_ruta(monto: float, codtipocredito: str,
 
     return {
         "monto_propuesto": float(monto),
+        "tramo_monto": tramo_monto,
+        "autoridad_monto": autoridad_monto,
         "endeudamiento_global": endeudamiento_global,
         "requiere_opinion_admin": requiere_admin,
         "requiere_opinion_jefe_regional": requiere_jefe_reg,
@@ -103,6 +114,7 @@ def crear_solicitud(db: Session, data, creado_por: str | None = None) -> dict:
         codactividadeconomica = data.codactividadeconomica,
         db                    = db,
     )
+    scoring_no_apto = scoring.get("resultado") == "NO APTO" or scoring.get("semaforo") == "ROJO"
 
     # 3) RDS — ratios de sobreendeudamiento (Art. 13)
     cuota = float(scoring.get("cuota_estimada") or 0)
@@ -132,13 +144,16 @@ def crear_solicitud(db: Session, data, creado_por: str | None = None) -> dict:
     # en dsolicitudestado, por eso la observación va en el motivo y en la respuesta).
     observado = elegib.get("observado", False)
     partes = ["Nueva solicitud (MPR-003-CRE)"]
+    if scoring_no_apto:
+        partes.append("NO APTO: capacidad de pago crítica")
     if creado_por:
         partes.append(f"creada por {creado_por}")
     if observado:
         partes.append("OBSERVADA: cliente CPP, requiere justificación")
     motivo = " | ".join(partes)
 
-    # Persistir la solicitud en estado 'En Evaluación' (act. 13).
+    # Persistir la solicitud. Si capacidad de pago bloquea, queda rechazada.
+    estado_inicial = repsol.ESTADO_RECHAZADO if scoring_no_apto else repsol.ESTADO_EN_EVALUACION
     creada = repsol.crear(
         db,
         pkcliente=cliente.pkcliente,
@@ -148,13 +163,15 @@ def crear_solicitud(db: Session, data, creado_por: str | None = None) -> dict:
         nrocuotas=data.plazo,
         codtipocredito=data.codtipocredito,
         pknivelaprobacion=pknivel,
+        estado=estado_inicial,
         motivo=motivo,
     )
 
     return {
         "codsolicitud": creada["codsolicitud"],
-        "estado": "En Evaluación",
+        "estado": "Rechazado" if scoring_no_apto else "En Evaluación",
         "observada": observado,
+        "no_apta": scoring_no_apto,
         "creado_por": creado_por,
         "elegibilidad": elegib,
         "scoring": scoring,
@@ -193,6 +210,8 @@ def enviar_a_comite(db: Session, codsolicitud: str, pkcomite: int | None = None)
     sol = repsol.obtener(db, codsolicitud)
     if not sol:
         return {"error": "Solicitud no encontrada"}
+    if sol.pksolicitudestado == repsol.ESTADO_RECHAZADO:
+        return {"error": "La solicitud fue rechazada/no apta y no puede enviarse a comité"}
     repsol.cambiar_estado(db, codsolicitud, repsol.ESTADO_EN_COMITE,
                           pkcomite=pkcomite)
     return {"codsolicitud": codsolicitud, "estado": "En Comité"}
@@ -207,6 +226,8 @@ def resolver(db: Session, codsolicitud: str, *, decision: str,
     sol = repsol.obtener(db, codsolicitud)
     if not sol:
         return {"error": "Solicitud no encontrada"}
+    if decision == "APROBADO" and sol.pksolicitudestado == repsol.ESTADO_RECHAZADO:
+        return {"error": "La solicitud fue rechazada/no apta y no puede aprobarse"}
 
     if decision == "APROBADO":
         monto = monto_aprobado if monto_aprobado is not None else float(sol.montosolicitudcredito or 0)

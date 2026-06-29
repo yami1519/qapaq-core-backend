@@ -1,5 +1,6 @@
 """Tarifarios oficiales para los productos Qapaq vigentes desde 2026-05-01."""
 from dataclasses import dataclass
+from math import isfinite
 
 
 @dataclass(frozen=True)
@@ -60,15 +61,27 @@ def obtener_tarifario(codtipocredito: str | None) -> TarifarioCredito:
 
 
 def tea_a_tem(tea: float) -> float:
-    # Conversion TEA a TEM usando base 360 dias del tarifario (30/360).
-    return (1 + tea / 100) ** (30 / 360) - 1
+    tea_val = float(tea or 0)
+    if not isfinite(tea_val) or tea_val < 0:
+        return 0.0
+    tea_decimal = tea_val / 100 if tea_val > 1 else tea_val
+    return (1 + tea_decimal) ** (1 / 12) - 1
 
 
 def cuota_francesa(principal: float, plazo: int, tea: float) -> float:
+    principal = float(principal or 0)
+    plazo = int(plazo or 0)
+    if not isfinite(principal) or principal <= 0 or plazo <= 0:
+        return 0.0
     tem = tea_a_tem(tea)
-    if tem <= 0:
+    if not isfinite(tem) or tem <= 0:
         return principal / plazo
-    return principal * tem / (1 - (1 + tem) ** (-plazo))
+    factor = (1 + tem) ** plazo
+    denominador = factor - 1
+    if denominador <= 0 or not isfinite(denominador):
+        return principal / plazo
+    cuota = principal * tem * factor / denominador
+    return cuota if isfinite(cuota) and cuota >= 0 else 0.0
 
 
 def generar_cronograma_frances(principal: float, plazo: int, tea: float) -> list[dict]:

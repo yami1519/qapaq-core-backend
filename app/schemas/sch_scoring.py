@@ -1,5 +1,4 @@
 from pydantic import BaseModel
-from typing import Optional
 
 class ScoringIn(BaseModel):
     codcliente: str
@@ -14,7 +13,11 @@ class ScoringOut(BaseModel):
     codcliente: str
     score: float               # 0 - 100
     decision: str              # APROBADO / OBSERVADO / RECHAZADO
+    resultado: str             # APROBABLE / OBSERVADO / NO APTO
+    semaforo: str              # VERDE / AMARILLO / ROJO
     tea_sugerida: float        # en porcentaje
+    tem_sugerida: float        # en porcentaje
     cuota_estimada: float      # S/
+    rds: float | None          # cuota_estimada / ingreso neto, en porcentaje
     observaciones: list[str]
     detalle_score: dict

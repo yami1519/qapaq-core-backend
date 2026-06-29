@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from app.core import cfg_tarifario
 from app.repositories import rep_clientes, rep_creditos
+from app.services import svc_reglas_credito
 
 # Tabla de referencia mantenida por compatibilidad con imports existentes.
 TEA_POR_TIPO = {
@@ -44,6 +45,9 @@ def calcular_score(
     observaciones = []
     detalle = {}
 
+    def add_observacion(texto: str) -> None:
+        svc_reglas_credito.agregar_observacion(observaciones, texto)
+
     # ── 1. CAPACIDAD DE PAGO (40 pts) ──────────────────────────
     tarifario = cfg_tarifario.obtener_tarifario(codtipocredito)
     tea_tipo = TEA_POR_TIPO.get(
@@ -51,22 +55,26 @@ def calcular_score(
     )
     tea_ref = tea_tipo["mid"]
     cuota = cfg_tarifario.cuota_francesa(montosolicitud, plazo, tea_ref)
-    ratio_cuota_ingreso = cuota / montoingresoneto if montoingresoneto > 0 else 1
+    ingreso_valido = svc_reglas_credito.ingreso_es_valido(montoingresoneto)
+    ratio_cuota_ingreso = cuota / montoingresoneto if ingreso_valido else None
 
-    if ratio_cuota_ingreso <= 0.30:
+    if not ingreso_valido:
+        score_capacidad = 0
+        add_observacion("Ingreso neto mensual inválido.")
+    elif ratio_cuota_ingreso <= 0.30:
         score_capacidad = 40
     elif ratio_cuota_ingreso <= 0.40:
         score_capacidad = 30
     elif ratio_cuota_ingreso <= 0.50:
         score_capacidad = 18
-        observaciones.append("Cuota representa más del 40% del ingreso neto.")
+        add_observacion("Cuota representa más del 40% del ingreso neto.")
     else:
         score_capacidad = 5
-        observaciones.append("Cuota supera el 50% del ingreso neto — riesgo alto.")
+        add_observacion("Cuota supera el 50% del ingreso neto mensual — riesgo crítico.")
 
     detalle["capacidad_pago"] = {
         "cuota_estimada": round(cuota, 2),
-        "ratio_cuota_ingreso": round(ratio_cuota_ingreso * 100, 2),
+        "ratio_cuota_ingreso": round(ratio_cuota_ingreso * 100, 2) if ratio_cuota_ingreso is not None else None,
         "puntaje": score_capacidad
     }
 
@@ -76,12 +84,12 @@ def calcular_score(
 
     if not cliente:
         score_historial = 10
-        observaciones.append("Cliente no registrado en la institución.")
+        add_observacion("Cliente no registrado en la institución.")
     else:
         tiene_vencido = rep_creditos.tiene_mala_calificacion(db, cliente.pkcliente)
         if tiene_vencido:
             score_historial = 5
-            observaciones.append("Cliente tiene créditos con calificación Deficiente, Dudoso o Pérdida.")
+            add_observacion("Cliente tiene créditos con calificación Deficiente, Dudoso o Pérdida.")
         else:
             score_historial = 30
 
@@ -103,7 +111,7 @@ def calcular_score(
         score_plazo = 4
     else:
         score_plazo = 2
-        observaciones.append("Plazo mayor a 10 años incrementa el riesgo.")
+        add_observacion("Plazo mayor a 10 años incrementa el riesgo.")
 
     detalle["plazo"] = {"meses": plazo, "puntaje": score_plazo}
 
@@ -112,27 +120,21 @@ def calcular_score(
     detalle["score_total"] = score_total
 
     # ── DECISIÓN ────────────────────────────────────────────────
-    if score_total >= 70:
-        decision = "APROBADO"
-        tea_sugerida = tea_tipo["min"]
-    elif score_total >= 50:
-        decision = "OBSERVADO"
-        tea_sugerida = tea_tipo["mid"]
-        observaciones.append("Requiere aprobación de jefe de agencia.")
-    else:
-        decision = "RECHAZADO"
-        tea_sugerida = tea_tipo["max"]
-        observaciones.append("Score insuficiente para aprobación automática.")
-
-    # Recalcular cuota con TEA real sugerida
-    cuota_final = cfg_tarifario.cuota_francesa(montosolicitud, plazo, tea_sugerida)
+    decision_credito = svc_reglas_credito.decidir_resultado_credito(
+        score_total=score_total,
+        monto=montosolicitud,
+        plazo=plazo,
+        ingreso_neto=montoingresoneto,
+        tea_minima=tea_tipo["min"],
+        tea_media=tea_tipo["mid"],
+        tea_maxima=tea_tipo["max"],
+        observaciones=observaciones,
+    )
 
     return {
         "codcliente":      codcliente,
         "score":           round(score_total, 2),
-        "decision":        decision,
-        "tea_sugerida":    tea_sugerida,
-        "cuota_estimada":  round(cuota_final, 2),
         "observaciones":   observaciones,
         "detalle_score":   detalle,
+        **decision_credito,
     }

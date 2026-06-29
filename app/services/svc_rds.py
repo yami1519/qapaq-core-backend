@@ -31,10 +31,10 @@ ROJO      = "ROJO"       # supera tolerancia
 
 # Límites por tipo de crédito (apetito, tolerancia)
 LIMITES = {
-    "ME": {"cuota_ingreso": (90, 200), "deuda_excedente": (75, 200), "cuota_excedente": (85, 95)},
-    "PE": {"cuota_ingreso": (90, 200), "deuda_excedente": (75, 200), "cuota_excedente": (85, 95)},
-    "CO": {"cuota_ingreso": (70, 100), "deuda_excedente": (75, 200), "cuota_excedente": (40, 80)},
-    "HI": {"cuota_ingreso": (70, 100), "deuda_excedente": (75, 200), "cuota_excedente": (40, 80)},
+    "ME": {"cuota_ingreso": (35, 50), "deuda_excedente": (75, 200), "cuota_excedente": (85, 95)},
+    "PE": {"cuota_ingreso": (35, 50), "deuda_excedente": (75, 200), "cuota_excedente": (85, 95)},
+    "CO": {"cuota_ingreso": (35, 50), "deuda_excedente": (75, 200), "cuota_excedente": (40, 80)},
+    "HI": {"cuota_ingreso": (35, 50), "deuda_excedente": (75, 200), "cuota_excedente": (40, 80)},
 }
 LIMITE_ENTIDADES = (4, 6)  # apetito, tolerancia
 
@@ -77,6 +77,10 @@ def evaluar(*, codtipocredito: str, cuota_propuesta: float, ingreso_neto: float,
         ap, tol = lim["cuota_ingreso"]
         ratios["cuota_ingreso"] = {"valor_pct": v, "apetito": ap, "tolerancia": tol,
                                    "semaforo": _semaforo(v, ap, tol)}
+    else:
+        ap, tol = lim["cuota_ingreso"]
+        ratios["cuota_ingreso"] = {"valor_pct": None, "apetito": ap, "tolerancia": tol,
+                                   "semaforo": ROJO}
 
     # 2) Deuda Total / Excedente (en "veces")
     if excedente > 0:
